@@ -1,7 +1,7 @@
 import snntorch as snn
 from snntorch import spikeplot as splt
 from snntorch import functional as SF
-from snntorch import spikegen, utils, surrogate, backprop
+from snntorch import spikegen, utils, surrogate
 
 import os
 import sys
@@ -95,3 +95,86 @@ def forward_pass(net, num_steps, data):
         mem_rec.append(mem_out)
 
     return torch.stack(spk_rec), torch.stack(mem_rec)
+
+spk_rec, mem_rec = forward_pass(net, num_steps, data)
+
+
+# =====================================
+#   forward pass
+# =====================================
+
+# loss function
+loss_fn = SF.ce_rate_loss()
+loss_val = loss_fn(spk_rec, targets)
+print(f"The loss from the untrained network is {loss_val.item():.2f}")
+
+# accuracy
+def acc_fn(dataloader, net, num_steps):
+    with torch.no_grad():
+        total = 0
+        acc = 0
+        net.eval()
+        dataloader = iter(dataloader)
+
+        for data, targets in dataloader:
+            data = data.to(device)
+            targets = targets.to(device)
+            spk_rec, _ = forward_pass(net, num_steps, data)
+
+            acc += SF.accuracy_rate(spk_rec, targets) * spk_rec.size(1)
+            total += spk_rec.size(1)
+
+    return acc/total
+
+test_acc = acc_fn(test_dataloader, net, num_steps)
+print(f"The accuracy from the untrained network is {test_acc*100:.2f}% for the test datas")
+
+# optimizer
+optimizer = torch.optim.Adam(net.parameters(), lr=1e-2, betas=(0.9, 0.999))
+
+# timer
+def print_total_time(start: float,
+                     end: float,
+                     device: torch.device = None):
+  total_time = end - start
+  print(f"Train time on {device}: {total_time:.3f} seconds")
+  print(f"Train time on {device}: {total_time/60:.1f} minutes")
+  return total_time
+
+
+# =====================================
+#   training loop
+# =====================================
+epochs = 2
+loss_hist = []
+test_acc_hist = []
+
+time_start = Timer()
+for epoch in tqdm(range(epochs)):
+    for data, targets in iter(train_dataloader):
+        data = data.to(device)
+        targets = targets.to(device)
+
+        net.train()
+        spk_rec, _ = forward_pass(net, num_steps, data)
+
+        loss_val = loss_fn(spk_rec, targets)
+
+        optimizer.zero_grad()
+        loss_val.backward()
+        optimizer.step()
+
+        loss_hist.append(loss_val.item())
+
+    test_acc = acc_fn(test_dataloader, net, num_steps)
+    test_acc_hist.append(test_acc)
+    print(f"Epoch {epoch}: test loss is {test_acc*100}% \n")
+    
+
+time_end = Timer()
+total_time = print_total_time(start = time_start,
+                              end = time_end,
+                              device = device)
+# test loss is 95.73%
+# Train time on cpu: 1134.474 seconds
+# Train time on cpu: 18.9 minutes
